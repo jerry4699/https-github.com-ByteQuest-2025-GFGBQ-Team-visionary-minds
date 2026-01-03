@@ -1,0 +1,9 @@
+{
+  "name": "CivicCare AI - Public Grievance Redressal",
+  "description": "An intelligent AI-powered platform for citizen grievance redressal, featuring automated classification, prioritization, and routing to improve public governance efficiency.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
