@@ -13,6 +13,12 @@ export enum Priority {
   LOW = 'LOW'
 }
 
+export interface GrievanceHistory {
+  timestamp: string;
+  action: string;
+  details: string;
+}
+
 export interface Grievance {
   id: string;
   citizenName: string;
@@ -23,6 +29,8 @@ export interface Grievance {
     lng: number;
     address: string;
   };
+  city: string;   // Added for jurisdiction filtering
+  state: string;  // Added for jurisdiction filtering
   priority: Priority;
   status: GrievanceStatus;
   timestamp: string;
@@ -36,6 +44,7 @@ export interface Grievance {
     language?: string;
     urgencyScore: number; // 0-100 score based on risk assessment
   };
+  history?: GrievanceHistory[];
 }
 
 export interface DashboardStats {
@@ -44,4 +53,9 @@ export interface DashboardStats {
   resolved: number;
   criticalCount: number;
   avgResolutionTime: number; // in hours
+}
+
+export interface Jurisdiction {
+  state: string;
+  city: string;
 }

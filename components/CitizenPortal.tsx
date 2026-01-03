@@ -1,11 +1,11 @@
-
-import React, { useState, useRef } from 'react';
-import { Camera, Mic, MapPin, Send, Loader2, Info, CheckCircle2, Volume2, ShieldCheck, StopCircle, Mic2 } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Camera, Mic, MapPin, Send, Loader2, Info, CheckCircle2, Volume2, ShieldCheck, StopCircle, Mic2, Square, Clock, ChevronRight } from 'lucide-react';
 import { analyzeGrievance, speakText, getPolicyInfo, transcribeAudio } from '../services/geminiService';
 import { Grievance, GrievanceStatus, Priority } from '../types';
 
 interface CitizenPortalProps {
   onGrievanceSubmit: (g: Grievance) => void;
+  recentGrievances?: Grievance[];
 }
 
 // Utility to decode base64 strings (replaces prohibited external library dependencies)
@@ -26,7 +26,8 @@ const decodeAudioData = async (
   sampleRate: number,
   numChannels: number,
 ): Promise<AudioBuffer> => {
-  const dataInt16 = new Int16Array(data.buffer);
+  // Use byteOffset and length to ensure we respect views if the array is a subarray
+  const dataInt16 = new Int16Array(data.buffer, data.byteOffset, data.length / 2);
   const frameCount = dataInt16.length / numChannels;
   const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
 
@@ -39,7 +40,7 @@ const decodeAudioData = async (
   return buffer;
 };
 
-const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
+const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recentGrievances = [] }) => {
   const [description, setDescription] = useState('');
   const [image, setImage] = useState<string | null>(null);
   const [location, setLocation] = useState<{ lat: number, lng: number, address: string } | null>(null);
@@ -51,11 +52,26 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
   // Voice Input State
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  
+  // TTS State
+  const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  useEffect(() => {
+    return () => {
+      // Cleanup audio context on unmount
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -172,6 +188,9 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
         timestamp: new Date().toISOString(),
         department: analysis.department,
         evidenceUrls: image ? [image] : [],
+        // Default values for city and state, will be updated by parent component based on jurisdiction
+        city: 'New Delhi',
+        state: 'Delhi',
         aiAnalysis: {
           sentiment: 'Neutral',
           suggestedResolution: analysis.suggestedResolution,
@@ -200,6 +219,7 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
 
   const checkPolicy = async () => {
     if (!description) return;
+    setPolicyInfo(null); // Reset prev info
     const info = await getPolicyInfo(description);
     setPolicyInfo(info);
   };
@@ -207,27 +227,64 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
   // Uses AudioContext to decode and play the raw PCM stream returned by Gemini
   const listenToPolicy = async () => {
     if (!policyInfo) return;
-    const audioData = await speakText(policyInfo.text);
-    if (audioData) {
-      try {
+    
+    // If already playing, stop it
+    if (isPlayingAudio) {
+      if (audioSourceRef.current) {
+        audioSourceRef.current.stop();
+        audioSourceRef.current = null;
+      }
+      setIsPlayingAudio(false);
+      return;
+    }
+
+    setIsGeneratingAudio(true);
+    try {
+      // Use text-to-speech
+      const audioData = await speakText(policyInfo.text);
+      
+      if (audioData) {
         if (!audioContextRef.current) {
           audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
         }
         const ctx = audioContextRef.current;
+        
+        // Ensure context is running (browsers often suspend it until interaction)
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+
         const decodedBytes = decode(audioData);
-        const audioBuffer = await decodeAudioData(decodedBytes, ctx, 24000, 1);
+        // Ensure even byte length for Int16Array (16-bit PCM)
+        const alignedBytes = decodedBytes.length % 2 !== 0 
+            ? decodedBytes.subarray(0, decodedBytes.length - 1) 
+            : decodedBytes;
+
+        const audioBuffer = await decodeAudioData(alignedBytes, ctx, 24000, 1);
+        
         const source = ctx.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(ctx.destination);
+        
+        source.onended = () => {
+          setIsPlayingAudio(false);
+          audioSourceRef.current = null;
+        };
+
+        audioSourceRef.current = source;
         source.start();
-      } catch (error) {
-        console.error('Audio playback failed', error);
+        setIsPlayingAudio(true);
       }
+    } catch (error) {
+      console.error('Audio playback failed', error);
+      alert('Unable to play audio. Please try again.');
+    } finally {
+      setIsGeneratingAudio(false);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
+    <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-500">
       {/* Hero Section */}
       <section className="text-center space-y-4 py-8">
         <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight sm:text-5xl">
@@ -353,6 +410,45 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
             </div>
           </form>
 
+          {/* Recent Grievances Timeline */}
+          {recentGrievances.length > 0 && (
+             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                <div className="p-4 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between">
+                   <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                     <Clock size={16} className="text-blue-500" />
+                     Your Request History
+                   </h3>
+                   <span className="text-xs font-medium text-slate-400">{recentGrievances.length} Reports</span>
+                </div>
+                <div className="divide-y divide-slate-50 max-h-[300px] overflow-y-auto">
+                   {recentGrievances.map(g => (
+                      <div key={g.id} className="p-4 hover:bg-slate-50 transition-colors flex gap-4">
+                         <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${
+                            g.status === GrievanceStatus.RESOLVED ? 'bg-green-500' :
+                            g.status === GrievanceStatus.IN_PROGRESS ? 'bg-blue-500' : 'bg-amber-500'
+                         }`} />
+                         <div className="flex-1 min-w-0">
+                            <div className="flex justify-between items-start mb-1">
+                               <span className="font-semibold text-slate-900 text-sm truncate pr-2">{g.department}</span>
+                               <span className="text-[10px] text-slate-400 whitespace-nowrap">{new Date(g.timestamp).toLocaleDateString()}</span>
+                            </div>
+                            <p className="text-xs text-slate-600 line-clamp-2 mb-2">{g.description}</p>
+                            <div className="flex items-center justify-between">
+                               <span className="text-[10px] font-mono text-slate-400">{g.id}</span>
+                               <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${
+                                  g.status === GrievanceStatus.RESOLVED ? 'bg-green-50 text-green-700' :
+                                  g.status === GrievanceStatus.IN_PROGRESS ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
+                               }`}>
+                                  {g.status.replace('_', ' ')}
+                               </span>
+                            </div>
+                         </div>
+                      </div>
+                   ))}
+                </div>
+             </div>
+          )}
+
           {/* Policy Information Section */}
           <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6">
             <div className="flex items-center justify-between mb-4">
@@ -376,10 +472,29 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
                 <div className="flex gap-2">
                   <button
                     onClick={listenToPolicy}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition-colors"
+                    disabled={isGeneratingAudio}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                       isPlayingAudio 
+                         ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                         : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                    }`}
                   >
-                    <Volume2 size={16} />
-                    Listen
+                    {isGeneratingAudio ? (
+                        <>
+                            <Loader2 size={16} className="animate-spin" />
+                            Generating Audio...
+                        </>
+                    ) : isPlayingAudio ? (
+                        <>
+                            <Square size={16} fill="currentColor" />
+                            Stop Listening
+                        </>
+                    ) : (
+                        <>
+                            <Volume2 size={16} />
+                            Listen
+                        </>
+                    )}
                   </button>
                 </div>
                 {policyInfo.sources?.length > 0 && (
