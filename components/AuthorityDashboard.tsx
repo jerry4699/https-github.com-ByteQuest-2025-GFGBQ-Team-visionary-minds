@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -6,8 +7,10 @@ import {
 import { 
   AlertCircle, CheckCircle2, Clock, Search, 
   Map as MapIcon, TrendingUp, Users, XCircle, ShieldAlert,
-  MapPin, Lightbulb, ChevronDown, ChevronUp, Image as ImageIcon, Phone, Navigation
+  MapPin, Lightbulb, ChevronDown, ChevronUp, Image as ImageIcon, Phone, Navigation, BrainCircuit, X,
+  Briefcase
 } from 'lucide-react';
+import L from 'leaflet';
 import { Grievance, GrievanceStatus, Priority, Jurisdiction } from '../types';
 
 interface AuthorityDashboardProps {
@@ -42,9 +45,33 @@ const CITY_CENTERS: Record<string, { lat: number, lng: number }> = {
   'Noida': { lat: 28.5355, lng: 77.3910 }
 };
 
+const MOCK_OFFICERS = [
+  'Rajesh Kumar', 
+  'Sita Verma', 
+  'Amit Singh', 
+  'Vikram Malhotra', 
+  'Priya Patel', 
+  'Anjali Desai'
+];
+
+// Haversine formula to calculate distance
+const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371; // Radius of the earth in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2); 
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+  const d = R * c; // Distance in km
+  return d;
+};
+
 const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({ 
   grievances, 
   onUpdateStatus, 
+  onAssignGrievance,
   userRole = 'admin',
   jurisdiction 
 }) => {
@@ -52,13 +79,16 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'resolved'>('all');
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   
-  // Google Maps State
+  // AI Analysis Modal State
+  const [analysisModalOpen, setAnalysisModalOpen] = useState(false);
+  const [selectedGrievance, setSelectedGrievance] = useState<Grievance | null>(null);
+
+  // Leaflet Map State
   const mapRef = useRef<HTMLDivElement>(null);
-  const [mapInstance, setMapInstance] = useState<any>(null);
-  const [directionsRenderer, setDirectionsRenderer] = useState<any>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+  const markersLayerRef = useRef<L.LayerGroup | null>(null);
+  const routeLayerRef = useRef<L.Polyline | null>(null);
   const [routeInfo, setRouteInfo] = useState<{ distance: string, duration: string } | null>(null);
-  const [isMapLoaded, setIsMapLoaded] = useState(false);
-  const markersRef = useRef<any[]>([]);
 
   // 1. Filter Data by Jurisdiction
   const relevantGrievances = useMemo(() => {
@@ -125,14 +155,17 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
     return Object.values(cityMap);
   }, [relevantGrievances, userRole, jurisdiction]);
 
-  const filteredGrievances = relevantGrievances.filter(g => {
-    const matchesSearch = g.description.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          g.citizenName.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesTab = activeTab === 'all' || 
-                       (activeTab === 'pending' && (g.status === GrievanceStatus.PENDING || g.status === GrievanceStatus.IN_PROGRESS)) ||
-                       (activeTab === 'resolved' && g.status === GrievanceStatus.RESOLVED);
-    return matchesSearch && matchesTab;
-  });
+  // Memoize filteredGrievances to prevent infinite loop in useEffects dependent on it
+  const filteredGrievances = useMemo(() => {
+    return relevantGrievances.filter(g => {
+      const matchesSearch = g.description.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            g.citizenName.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesTab = activeTab === 'all' || 
+                         (activeTab === 'pending' && (g.status === GrievanceStatus.PENDING || g.status === GrievanceStatus.IN_PROGRESS)) ||
+                         (activeTab === 'resolved' && g.status === GrievanceStatus.RESOLVED);
+      return matchesSearch && matchesTab;
+    });
+  }, [relevantGrievances, searchTerm, activeTab]);
 
   const chartData = useMemo(() => {
     const categories: Record<string, number> = {};
@@ -142,92 +175,83 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
     return Object.entries(categories).map(([name, value]) => ({ name, value }));
   }, [relevantGrievances]);
 
-  // Load Google Maps Script
+  // Initialize Leaflet Map
   useEffect(() => {
-    if ((window as any).google || isMapLoaded) {
-      setIsMapLoaded(true);
-      return;
-    }
+    if (!mapRef.current) return;
+    if (mapInstanceRef.current) return;
 
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.API_KEY}&libraries=places`;
-    script.async = true;
-    script.defer = true;
-    script.onload = () => setIsMapLoaded(true);
-    document.head.appendChild(script);
+    // Default center
+    const defaultCenter: [number, number] = jurisdiction?.city && CITY_CENTERS[jurisdiction.city] 
+        ? [CITY_CENTERS[jurisdiction.city].lat, CITY_CENTERS[jurisdiction.city].lng] 
+        : [20.5937, 78.9629];
+
+    const map = L.map(mapRef.current).setView(defaultCenter, jurisdiction?.city ? 13 : 5);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const markersGroup = L.layerGroup().addTo(map);
+    markersLayerRef.current = markersGroup;
+
+    mapInstanceRef.current = map;
+
+    // Fix for map rendering issues (gray areas) when container animates
+    const resizeObserver = new ResizeObserver(() => {
+        map.invalidateSize();
+    });
+    resizeObserver.observe(mapRef.current);
+
+    // Initial invalidation after a short delay to ensure container is fully rendered
+    setTimeout(() => {
+        map.invalidateSize();
+    }, 100);
 
     return () => {
-      // Cleanup not typically needed for singleton script, but good practice to limit side effects if needed
+        resizeObserver.disconnect();
+        map.remove();
+        mapInstanceRef.current = null;
     };
-  }, []);
-
-  // Initialize Map
-  useEffect(() => {
-    if (isMapLoaded && mapRef.current && !mapInstance) {
-      const defaultCenter = jurisdiction?.city && CITY_CENTERS[jurisdiction.city] 
-        ? CITY_CENTERS[jurisdiction.city] 
-        : { lat: 20.5937, lng: 78.9629 }; // India center fallback
-
-      const map = new (window as any).google.maps.Map(mapRef.current, {
-        center: defaultCenter,
-        zoom: jurisdiction?.city ? 13 : 5,
-        styles: [
-            { "featureType": "poi", "stylers": [{ "visibility": "off" }] } // Cleaner map
-        ],
-        mapTypeControl: false,
-        streetViewControl: false,
-      });
-
-      const renderer = new (window as any).google.maps.DirectionsRenderer({
-        suppressMarkers: false,
-        polylineOptions: { strokeColor: '#2563eb', strokeOpacity: 0.8, strokeWeight: 5 }
-      });
-      renderer.setMap(map);
-      
-      setMapInstance(map);
-      setDirectionsRenderer(renderer);
-    }
-  }, [isMapLoaded, mapRef, jurisdiction]);
+  }, [jurisdiction]);
 
   // Update Markers
   useEffect(() => {
-    if (!mapInstance || !isMapLoaded) return;
+    const map = mapInstanceRef.current;
+    const markersGroup = markersLayerRef.current;
+    if (!map || !markersGroup) return;
 
-    // Clear existing markers
-    markersRef.current.forEach(m => m.setMap(null));
-    markersRef.current = [];
+    markersGroup.clearLayers();
 
-    // Add new markers
     filteredGrievances.forEach(g => {
         if (g.location) {
-            const marker = new (window as any).google.maps.Marker({
-                position: g.location,
-                map: mapInstance,
-                title: g.description,
-                icon: {
-                    path: (window as any).google.maps.SymbolPath.CIRCLE,
-                    scale: 7,
-                    fillColor: g.priority === Priority.CRITICAL ? '#ef4444' : g.priority === Priority.HIGH ? '#f97316' : '#3b82f6',
-                    fillOpacity: 1,
-                    strokeWeight: 2,
-                    strokeColor: '#ffffff',
-                }
-            });
+            const color = g.priority === Priority.CRITICAL ? '#ef4444' : g.priority === Priority.HIGH ? '#f97316' : '#3b82f6';
             
-            // Add click listener to select row
-            marker.addListener('click', () => {
-                setExpandedRow(g.id);
+            const customIcon = L.divIcon({
+                className: 'custom-div-icon',
+                html: `<div style="background-color: ${color}; width: 14px; height: 14px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>`,
+                iconSize: [14, 14],
+                iconAnchor: [7, 7]
             });
 
-            markersRef.current.push(marker);
+            const marker = L.marker([g.location.lat, g.location.lng], { icon: customIcon })
+                .bindTooltip(g.description)
+                .on('click', () => setExpandedRow(g.id));
+            
+            markersGroup.addLayer(marker);
         }
     });
+  }, [filteredGrievances]);
 
-  }, [mapInstance, filteredGrievances, isMapLoaded]);
-
-  // Calculate Route when Expanded Row Changes
+  // Calculate Route (Polyline)
   useEffect(() => {
-    if (!mapInstance || !directionsRenderer || !isMapLoaded || !(window as any).google) return;
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    // Clear previous route
+    if (routeLayerRef.current) {
+        routeLayerRef.current.remove();
+        routeLayerRef.current = null;
+    }
 
     if (expandedRow) {
         const selectedGrievance = filteredGrievances.find(g => g.id === expandedRow);
@@ -235,47 +259,69 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
         if (selectedGrievance && selectedGrievance.location) {
             const city = selectedGrievance.city || 'New Delhi';
             const origin = CITY_CENTERS[city] || CITY_CENTERS['New Delhi'];
+            
+            const startLatLng: [number, number] = [origin.lat, origin.lng];
+            const endLatLng: [number, number] = [selectedGrievance.location.lat, selectedGrievance.location.lng];
 
-            const directionsService = new (window as any).google.maps.DirectionsService();
+            // Draw line
+            const polyline = L.polyline([startLatLng, endLatLng], {
+                color: '#2563eb',
+                weight: 4,
+                opacity: 0.7,
+                dashArray: '10, 10'
+            }).addTo(map);
 
-            directionsService.route({
-                origin: origin,
-                destination: selectedGrievance.location,
-                travelMode: (window as any).google.maps.TravelMode.DRIVING
-            }, (result: any, status: any) => {
-                if (status === 'OK') {
-                    directionsRenderer.setDirections(result);
-                    // Extract duration and distance
-                    const leg = result.routes[0].legs[0];
-                    setRouteInfo({
-                        distance: leg.distance.text,
-                        duration: leg.duration.text
-                    });
-                } else {
-                    console.error('Directions request failed due to ' + status);
-                    setRouteInfo(null);
-                }
+            routeLayerRef.current = polyline;
+
+            // Fit bounds to show route
+            map.fitBounds(polyline.getBounds(), { padding: [50, 50] });
+
+            // Calculate Metrics
+            const distKm = calculateDistance(origin.lat, origin.lng, selectedGrievance.location.lat, selectedGrievance.location.lng);
+            // Assume avg speed 30km/h in city
+            const durationHrs = distKm / 30;
+            const durationMins = Math.round(durationHrs * 60);
+
+            setRouteInfo({
+                distance: `${distKm.toFixed(1)} km`,
+                duration: durationMins > 60 
+                    ? `${Math.floor(durationMins/60)}h ${durationMins%60}m` 
+                    : `${durationMins} mins`
             });
+            
+            // Re-invalidate size to ensure map is sharp after fitBounds
+            setTimeout(() => map.invalidateSize(), 50);
         }
     } else {
-        // Clear route if closed
-        directionsRenderer.setDirections({ routes: [] });
         setRouteInfo(null);
-        // Reset zoom to city level
+        // Reset view if needed, or leave as is
         if (jurisdiction?.city && CITY_CENTERS[jurisdiction.city]) {
-             mapInstance.panTo(CITY_CENTERS[jurisdiction.city]);
-             mapInstance.setZoom(13);
+             map.flyTo([CITY_CENTERS[jurisdiction.city].lat, CITY_CENTERS[jurisdiction.city].lng], 13);
         }
     }
-  }, [expandedRow, mapInstance, directionsRenderer, filteredGrievances, isMapLoaded]);
-
+  }, [expandedRow, filteredGrievances, jurisdiction]);
 
   const toggleExpand = (id: string) => {
     setExpandedRow(expandedRow === id ? null : id);
   };
 
+  const openAnalysisModal = (g: Grievance) => {
+    setSelectedGrievance(g);
+    setAnalysisModalOpen(true);
+  };
+
+  const closeAnalysisModal = () => {
+    setAnalysisModalOpen(false);
+    setSelectedGrievance(null);
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-700 relative pb-12">
+      {/* CSS Fix for Tailwind-Leaflet Conflict */}
+      <style>{`
+        .leaflet-pane img { max-width: none !important; }
+        .leaflet-container { z-index: 0; font-family: inherit; }
+      `}</style>
       
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-200 pb-6">
@@ -575,33 +621,35 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
                                                             </div>
                                                         </div>
                                                     </div>
-                                                    
-                                                    {g.aiAnalysis?.imageAnalysis && (
-                                                        <div>
-                                                            <h4 className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-2">AI Image Insights</h4>
-                                                            <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 text-sm">
-                                                                <div className="flex items-center gap-2 font-semibold text-indigo-900 mb-1">
-                                                                    <Lightbulb size={14} />
-                                                                    Status: {g.aiAnalysis.imageAnalysis.status}
-                                                                </div>
-                                                                <div className="text-indigo-800 text-xs leading-relaxed mb-2">
-                                                                    {g.aiAnalysis.imageAnalysis.description}
-                                                                </div>
-                                                                <div className="flex gap-2">
-                                                                    <span className={`text-[10px] px-2 py-0.5 rounded border ${
-                                                                        g.aiAnalysis.imageAnalysis.quality === 'Good' 
-                                                                        ? 'bg-green-100 text-green-700 border-green-200' 
-                                                                        : 'bg-amber-100 text-amber-700 border-amber-200'
-                                                                    }`}>
-                                                                        Quality: {g.aiAnalysis.imageAnalysis.quality}
-                                                                    </span>
-                                                                </div>
-                                                                <div className="mt-2 text-[10px] text-indigo-400 italic">
-                                                                    *AI assists in relevance check only.
-                                                                </div>
-                                                            </div>
+
+                                                    {/* Admin Assignment Section */}
+                                                    {userRole === 'admin' && (
+                                                        <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+                                                            <h4 className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-2 flex items-center gap-1">
+                                                                <Briefcase size={12} /> Assign Officer
+                                                            </h4>
+                                                            <select 
+                                                                className="w-full bg-slate-50 border border-slate-200 text-sm rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-blue-500 font-medium text-slate-700"
+                                                                value={g.assignedTo || ''}
+                                                                onChange={(e) => onAssignGrievance(g.id, e.target.value)}
+                                                            >
+                                                                <option value="">Unassigned</option>
+                                                                {MOCK_OFFICERS.map(officer => (
+                                                                    <option key={officer} value={officer}>{officer}</option>
+                                                                ))}
+                                                            </select>
                                                         </div>
                                                     )}
+
+                                                    <div className="pt-2">
+                                                        <button 
+                                                            onClick={() => openAnalysisModal(g)}
+                                                            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 text-white rounded-lg text-sm font-bold shadow-md hover:shadow-lg transition-all"
+                                                        >
+                                                            <BrainCircuit size={16} />
+                                                            View Comprehensive AI Report
+                                                        </button>
+                                                    </div>
                                                 </div>
 
                                                 {/* Right: Evidence Gallery */}
@@ -671,8 +719,8 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
                      </div>
                 )}
                 
-                {/* Google Map Container */}
-                <div ref={mapRef} className="w-full h-full rounded-lg" />
+                {/* Leaflet Map Container */}
+                <div ref={mapRef} className="w-full h-full rounded-lg z-0 relative" />
             </div>
 
             <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
@@ -712,6 +760,105 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
             </div>
         </div>
       </div>
+      
+      {/* AI Analysis Modal */}
+      {analysisModalOpen && selectedGrievance && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-indigo-600 p-6 text-white flex justify-between items-start">
+                <div>
+                    <h3 className="text-xl font-bold flex items-center gap-2">
+                    <BrainCircuit className="text-indigo-200" />
+                    AI Governance Analysis
+                    </h3>
+                    <p className="text-indigo-100 text-sm mt-1">Automated triage report for ID: {selectedGrievance.id}</p>
+                </div>
+                <button onClick={closeAnalysisModal} className="text-indigo-100 hover:text-white transition-colors">
+                    <X size={24} />
+                </button>
+            </div>
+            
+            <div className="p-6 space-y-6">
+                {/* Urgency Section */}
+                <div className="flex gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-center px-4 border-r border-slate-200">
+                        <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Urgency Score</div>
+                        <div className={`text-3xl font-extrabold mt-1 ${
+                            (selectedGrievance.aiAnalysis?.urgencyScore || 0) > 75 ? 'text-red-600' : 
+                            (selectedGrievance.aiAnalysis?.urgencyScore || 0) > 50 ? 'text-orange-600' : 'text-blue-600'
+                        }`}>
+                            {selectedGrievance.aiAnalysis?.urgencyScore || 'N/A'}
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Risk Assessment</div>
+                        <p className="text-slate-700 font-medium leading-relaxed">
+                            {selectedGrievance.aiAnalysis?.urgencyReason}
+                        </p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Resolution */}
+                    <div>
+                        <h4 className="flex items-center gap-2 font-bold text-slate-900 mb-2">
+                            <CheckCircle2 size={18} className="text-green-600" />
+                            Suggested Resolution
+                        </h4>
+                        <p className="text-slate-600 text-sm leading-relaxed bg-green-50 p-3 rounded-lg border border-green-100 text-green-800">
+                            {selectedGrievance.aiAnalysis?.suggestedResolution}
+                        </p>
+                    </div>
+
+                    {/* Sentiment & Language */}
+                    <div>
+                        <h4 className="flex items-center gap-2 font-bold text-slate-900 mb-2">
+                            <Users size={18} className="text-blue-600" />
+                            Citizen Sentiment
+                        </h4>
+                        <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 space-y-2">
+                        <div className="flex justify-between text-sm">
+                            <span className="text-slate-500">Detected Emotion:</span>
+                            <span className="font-semibold text-slate-700">{selectedGrievance.aiAnalysis?.sentiment}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                            <span className="text-slate-500">Language:</span>
+                            <span className="font-semibold text-slate-700">{selectedGrievance.aiAnalysis?.language}</span>
+                        </div>
+                        </div>
+                    </div>
+                </div>
+                
+                {/* Image Analysis Section if exists */}
+                {selectedGrievance.aiAnalysis?.imageAnalysis && (
+                    <div className="border-t border-slate-100 pt-4">
+                        <h4 className="flex items-center gap-2 font-bold text-slate-900 mb-3">
+                            <ImageIcon size={18} className="text-purple-600" />
+                            Visual Verification
+                        </h4>
+                        <div className="bg-purple-50 p-4 rounded-xl border border-purple-100 flex gap-4 items-start">
+                            <div className="space-y-1">
+                                <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border ${
+                                    selectedGrievance.aiAnalysis.imageAnalysis.status === 'Relevant' ? 'bg-green-100 text-green-700 border-green-200' : 'bg-amber-100 text-amber-700 border-amber-200'
+                                }`}>
+                                    {selectedGrievance.aiAnalysis.imageAnalysis.status}
+                                </span>
+                                <p className="text-sm text-purple-900 leading-relaxed">
+                                    {selectedGrievance.aiAnalysis.imageAnalysis.description}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+            <div className="bg-slate-50 p-4 border-t border-slate-200 flex justify-end">
+                <button onClick={closeAnalysisModal} className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50 transition-colors">
+                    Close Report
+                </button>
+            </div>
+            </div>
+        </div>
+      )}
     </div>
   );
 };
