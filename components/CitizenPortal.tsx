@@ -1,5 +1,6 @@
+
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Mic, MapPin, Send, Loader2, Info, CheckCircle2, Volume2, ShieldCheck, StopCircle, Mic2, Square, Clock, ChevronRight } from 'lucide-react';
+import { Camera, Mic, MapPin, Send, Loader2, Info, CheckCircle2, Volume2, ShieldCheck, StopCircle, Mic2, Square, Clock, ChevronRight, Phone, Image as ImageIcon, X } from 'lucide-react';
 import { analyzeGrievance, speakText, getPolicyInfo, transcribeAudio } from '../services/geminiService';
 import { Grievance, GrievanceStatus, Priority } from '../types';
 
@@ -42,7 +43,8 @@ const decodeAudioData = async (
 
 const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recentGrievances = [] }) => {
   const [description, setDescription] = useState('');
-  const [image, setImage] = useState<string | null>(null);
+  const [phoneNumber, setPhoneNumber] = useState(''); // New optional field
+  const [images, setImages] = useState<string[]>([]); // Changed to array for multiple images
   const [location, setLocation] = useState<{ lat: number, lng: number, address: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
@@ -74,14 +76,27 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (e.target.files) {
+      const remainingSlots = 3 - images.length;
+      if (remainingSlots <= 0) {
+        alert("Maximum 3 images allowed.");
+        return;
+      }
+      
+      const filesToProcess = Array.from(e.target.files).slice(0, remainingSlots);
+      
+      filesToProcess.forEach(file => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setImages(prev => [...prev, reader.result as string]);
+        };
+        reader.readAsDataURL(file);
+      });
     }
+  };
+
+  const removeImage = (index: number) => {
+    setImages(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleGetLocation = () => {
@@ -175,11 +190,12 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
 
     setIsSubmitting(true);
     try {
-      const analysis = await analyzeGrievance(description, image || undefined);
+      const analysis = await analyzeGrievance(description, images);
       
       const newGrievance: Grievance = {
         id: `G-${Math.floor(Math.random() * 9000 + 1000)}`,
         citizenName: 'User Guest', // Simplified
+        citizenPhone: phoneNumber || undefined,
         category: analysis.category,
         description,
         location: location || undefined,
@@ -187,7 +203,7 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
         status: GrievanceStatus.PENDING,
         timestamp: new Date().toISOString(),
         department: analysis.department,
-        evidenceUrls: image ? [image] : [],
+        evidenceUrls: images,
         // Default values for city and state, will be updated by parent component based on jurisdiction
         city: 'New Delhi',
         state: 'Delhi',
@@ -196,14 +212,16 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
           suggestedResolution: analysis.suggestedResolution,
           urgencyReason: analysis.urgencyReason,
           language: analysis.language,
-          urgencyScore: analysis.urgencyScore
+          urgencyScore: analysis.urgencyScore,
+          imageAnalysis: analysis.imageAnalysis
         }
       };
 
       onGrievanceSubmit(newGrievance);
       setShowSuccess(true);
       setDescription('');
-      setImage(null);
+      setImages([]);
+      setPhoneNumber('');
       setLocation(null);
       
       // Auto-hide success message
@@ -330,7 +348,7 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Type here or click the microphone to speak..."
-                  className="w-full h-40 p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all resize-none pr-12"
+                  className="w-full h-32 p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all resize-none pr-12"
                   required
                 />
                 <button
@@ -348,21 +366,40 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
                 </button>
               </div>
 
+               {/* Optional Phone Number */}
+               <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Phone Number <span className="text-slate-400 font-normal">(Optional - for updates only)</span>
+                  </label>
+                  <div className="relative">
+                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                      <input 
+                          type="tel"
+                          value={phoneNumber}
+                          onChange={(e) => setPhoneNumber(e.target.value)}
+                          placeholder="e.g., 98765 43210"
+                          className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                  </div>
+              </div>
+
               <div className="flex flex-wrap gap-4 items-center justify-between pt-2 border-t border-slate-50">
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className={`p-2 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium ${image ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                    disabled={images.length >= 3}
+                    className={`p-2 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium ${images.length > 0 ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
                   >
                     <Camera size={18} />
-                    {image ? 'Photo Added' : 'Add Photo'}
+                    {images.length > 0 ? `Added (${images.length}/3)` : 'Add Photos'}
                   </button>
                   <input
                     type="file"
                     ref={fileInputRef}
                     onChange={handleFileChange}
                     accept="image/*"
+                    multiple
                     className="hidden"
                   />
                   
@@ -396,15 +433,24 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
                 </button>
               </div>
 
-              {image && (
-                <div className="relative mt-4 group">
-                  <img src={image} alt="Evidence" className="w-full h-48 object-cover rounded-xl" />
-                  <button 
-                    onClick={() => setImage(null)}
-                    className="absolute top-2 right-2 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    ×
-                  </button>
+              {/* Image Preview Grid */}
+              {images.length > 0 && (
+                <div className="space-y-2">
+                    <p className="text-xs text-slate-400">Upload photos to help officers understand the issue. AI assists by checking image relevance and quality.</p>
+                    <div className="flex gap-2 overflow-x-auto pb-2">
+                        {images.map((img, idx) => (
+                            <div key={idx} className="relative group shrink-0 w-24 h-24">
+                                <img src={img} alt={`Evidence ${idx + 1}`} className="w-full h-full object-cover rounded-lg border border-slate-200" />
+                                <button 
+                                    type="button"
+                                    onClick={() => removeImage(idx)}
+                                    className="absolute -top-2 -right-2 bg-slate-900 text-white p-0.5 rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                    <X size={14} />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
                 </div>
               )}
             </div>
@@ -531,7 +577,7 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
             <ul className="space-y-3">
               {[
                 { icon: <Mic2 size={16} />, text: 'Speak or type your grievance.' },
-                { icon: <Camera size={16} />, text: 'AI analyzes visual evidence.' },
+                { icon: <Camera size={16} />, text: 'Upload photos (optional).' },
                 { icon: <ShieldCheck size={16} />, text: 'Prioritized by severity automatically.' },
                 { icon: <Send size={16} />, text: 'Sent to the correct department.' }
               ].map((step, i) => (

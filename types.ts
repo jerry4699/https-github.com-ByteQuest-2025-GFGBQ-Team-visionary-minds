@@ -22,6 +22,7 @@ export interface GrievanceHistory {
 export interface Grievance {
   id: string;
   citizenName: string;
+  citizenPhone?: string; // Optional: For updates only
   category: string;
   description: string;
   location?: {
@@ -29,8 +30,8 @@ export interface Grievance {
     lng: number;
     address: string;
   };
-  city: string;   // Added for jurisdiction filtering
-  state: string;  // Added for jurisdiction filtering
+  city: string;   
+  state: string;  
   priority: Priority;
   status: GrievanceStatus;
   timestamp: string;
@@ -42,7 +43,12 @@ export interface Grievance {
     suggestedResolution: string;
     urgencyReason: string;
     language?: string;
-    urgencyScore: number; // 0-100 score based on risk assessment
+    urgencyScore: number; 
+    imageAnalysis?: {
+        status: 'Relevant' | 'Unclear' | 'Review Needed' | 'No Image';
+        quality: 'Good' | 'Blurry' | 'Dark' | 'Low Resolution' | 'N/A';
+        description: string;
+    };
   };
   history?: GrievanceHistory[];
 }

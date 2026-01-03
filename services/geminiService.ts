@@ -4,7 +4,7 @@ import { GoogleGenAI, Type, GenerateContentResponse, Modality } from "@google/ge
 // Standard GoogleGenAI initialization using the direct process.env.API_KEY string
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export const analyzeGrievance = async (text: string, imageData?: string) => {
+export const analyzeGrievance = async (text: string, images: string[] = []) => {
   const ai = getAI();
   const model = "gemini-3-pro-preview";
   
@@ -28,18 +28,28 @@ export const analyzeGrievance = async (text: string, imageData?: string) => {
        - 70-89: High health risk or severe disruption (HIGH).
        - 40-69: Quality of life issue or inconvenience (MEDIUM).
        - 0-39: Information request or minor suggestion (LOW).
+
+    3. Image Analysis (Safe & Assistive):
+       - If images are provided, check if they appear VISUALLY CONSISTENT with the text complaint (e.g., if text says "pothole", is there a road/pothole?).
+       - Check for quality issues (Blurry, Too Dark, Unclear).
+       - IMPORTANT: Do NOT claim to verify authenticity or detect AI-generated images. Focus only on relevance and clarity.
     
-    3. Output: JSON format.
+    4. Output: JSON format.
     
     Grievance text: ${text}
   ` }];
 
-  if (imageData) {
-    contents.push({
-      inlineData: {
-        mimeType: "image/jpeg",
-        data: imageData.split(',')[1]
-      }
+  // Add multiple images if present
+  if (images && images.length > 0) {
+    images.forEach(imgData => {
+        // Handle potentially different base64 formats, strictly assume jpeg for this demo or extract
+        const base64Data = imgData.includes(',') ? imgData.split(',')[1] : imgData;
+        contents.push({
+            inlineData: {
+                mimeType: "image/jpeg", 
+                data: base64Data
+            }
+        });
     });
   }
 
@@ -58,7 +68,16 @@ export const analyzeGrievance = async (text: string, imageData?: string) => {
           urgencyReason: { type: Type.STRING },
           suggestedResolution: { type: Type.STRING },
           language: { type: Type.STRING, description: "The detected language (e.g., English, Hindi, Tamil)" },
-          urgencyScore: { type: Type.INTEGER, description: "Calculated risk score from 0-100" }
+          urgencyScore: { type: Type.INTEGER, description: "Calculated risk score from 0-100" },
+          imageAnalysis: {
+            type: Type.OBJECT,
+            properties: {
+                status: { type: Type.STRING, description: "Relevant, Unclear, Review Needed, or No Image" },
+                quality: { type: Type.STRING, description: "Good, Blurry, Dark, Low Resolution, or N/A" },
+                description: { type: Type.STRING, description: "Brief note on image content vs complaint context." }
+            },
+            // Make imageAnalysis optional in schema validation but encouraged
+          }
         },
         required: ["category", "priority", "department", "summary", "urgencyReason", "suggestedResolution", "language", "urgencyScore"]
       },
