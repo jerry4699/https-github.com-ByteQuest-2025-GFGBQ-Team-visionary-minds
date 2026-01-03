@@ -8,8 +8,31 @@ export const analyzeGrievance = async (text: string, imageData?: string) => {
   const ai = getAI();
   const model = "gemini-3-pro-preview";
   
-  const contents: any[] = [{ text: `Analyze the following citizen grievance and categorize it. Provide a priority level (CRITICAL, HIGH, MEDIUM, LOW), a target department, and a summary.
-  Grievance text: ${text}` }];
+  // Prompt engineered to align with CPGRAMS (India) and GovernanceBERT principles
+  const contents: any[] = [{ text: `
+    Role: You are an expert Government Grievance Officer and AI Triage System aligned with CPGRAMS standards.
+    
+    Task: Analyze the citizen grievance below.
+    
+    1. Taxonomy & Routing: Classify the grievance into one of these Official CPGRAMS Categories:
+       - Public Health & Family Welfare (Sanitation, Hospitals, Disease)
+       - Road Transport & Highways (Potholes, Traffic, Road Safety)
+       - Housing & Urban Affairs (Water Supply, Encroachment, Lighting)
+       - Law & Order (Civil safety, Crime reporting)
+       - Power & Energy (Electricity grid, Outages)
+       - School Education & Literacy (Infrastructure, Staffing)
+    
+    2. Urgency Scoring (0-100):
+       - Calculate a "Public Safety Risk Score".
+       - 90-100: Immediate threat to life or major infrastructure failure (CRITICAL).
+       - 70-89: High health risk or severe disruption (HIGH).
+       - 40-69: Quality of life issue or inconvenience (MEDIUM).
+       - 0-39: Information request or minor suggestion (LOW).
+    
+    3. Output: JSON format.
+    
+    Grievance text: ${text}
+  ` }];
 
   if (imageData) {
     contents.push({
@@ -33,9 +56,11 @@ export const analyzeGrievance = async (text: string, imageData?: string) => {
           department: { type: Type.STRING },
           summary: { type: Type.STRING },
           urgencyReason: { type: Type.STRING },
-          suggestedResolution: { type: Type.STRING }
+          suggestedResolution: { type: Type.STRING },
+          language: { type: Type.STRING, description: "The detected language (e.g., English, Hindi, Tamil)" },
+          urgencyScore: { type: Type.INTEGER, description: "Calculated risk score from 0-100" }
         },
-        required: ["category", "priority", "department", "summary", "urgencyReason", "suggestedResolution"]
+        required: ["category", "priority", "department", "summary", "urgencyReason", "suggestedResolution", "language", "urgencyScore"]
       },
       thinkingConfig: { thinkingBudget: 32768 }
     }
@@ -44,11 +69,34 @@ export const analyzeGrievance = async (text: string, imageData?: string) => {
   return JSON.parse(response.text || '{}');
 };
 
+export const transcribeAudio = async (base64Audio: string, mimeType: string = 'audio/webm') => {
+  const ai = getAI();
+  // Using the native audio model for best speech recognition performance
+  const model = "gemini-2.5-flash-native-audio-preview-09-2025";
+  
+  const response = await ai.models.generateContent({
+    model,
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            mimeType: mimeType,
+            data: base64Audio
+          }
+        },
+        { text: "Transcribe this audio exactly as spoken. If there are multiple languages, transcribe them as they are." }
+      ]
+    }
+  });
+
+  return response.text;
+};
+
 export const getPolicyInfo = async (query: string) => {
   const ai = getAI();
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Find official government policy information related to: ${query}`,
+    contents: `Find official government policy information (Acts, Schemes, Rules) related to: ${query}. Focus on Indian Government policies if applicable.`,
     config: {
       tools: [{ googleSearch: {} }]
     }

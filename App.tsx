@@ -9,33 +9,57 @@ const MOCK_GRIEVANCES: Grievance[] = [
   {
     id: 'G-1024',
     citizenName: 'Rahul Sharma',
-    category: 'Civic Infrastructure',
+    category: 'Road Transport & Highways',
     description: 'Deep pothole on the main crossroad near the metro station, causing traffic issues.',
     priority: Priority.HIGH,
     status: GrievanceStatus.PENDING,
     timestamp: new Date().toISOString(),
-    department: 'Public Works Department (PWD)',
+    department: 'Department of Public Works (PWD)',
     evidenceUrls: ['https://picsum.photos/400/300?random=1'],
+    assignedTo: 'Rajesh Kumar',
     aiAnalysis: {
       sentiment: 'Anxious',
       suggestedResolution: 'Dispatch immediate asphalt repair crew.',
-      urgencyReason: 'High risk of vehicular accidents.'
+      urgencyReason: 'High risk of vehicular accidents near metro station.',
+      urgencyScore: 85,
+      language: 'English'
     }
   },
   {
     id: 'G-1025',
     citizenName: 'Anjali Gupta',
-    category: 'Sanitation',
-    description: 'Garbage collection has not happened in our society for the last 4 days.',
+    category: 'Public Health & Family Welfare',
+    description: 'Garbage collection has not happened in our society for the last 4 days. Foul smell spreading.',
     priority: Priority.MEDIUM,
     status: GrievanceStatus.IN_PROGRESS,
     timestamp: new Date(Date.now() - 86400000).toISOString(),
     department: 'Municipal Corporation',
     evidenceUrls: ['https://picsum.photos/400/300?random=2'],
+    assignedTo: 'Sita Verma',
     aiAnalysis: {
       sentiment: 'Frustrated',
       suggestedResolution: 'Reroute secondary collection truck.',
-      urgencyReason: 'Health hazard due to accumulating waste.'
+      urgencyReason: 'Health hazard due to accumulating waste.',
+      urgencyScore: 65,
+      language: 'English'
+    }
+  },
+  {
+    id: 'G-1026',
+    citizenName: 'Vikram Singh',
+    category: 'Power & Energy',
+    description: 'Live wire hanging from transformer pole outside primary school.',
+    priority: Priority.CRITICAL,
+    status: GrievanceStatus.PENDING,
+    timestamp: new Date(Date.now() - 3600000).toISOString(),
+    department: 'Electricity Board',
+    evidenceUrls: [],
+    aiAnalysis: {
+      sentiment: 'Panicked',
+      suggestedResolution: 'Immediate grid cutoff and emergency repair team dispatch.',
+      urgencyReason: 'Immediate threat to life for school children.',
+      urgencyScore: 98,
+      language: 'Hindi'
     }
   }
 ];
@@ -50,6 +74,10 @@ const App: React.FC = () => {
 
   const updateGrievanceStatus = (id: string, status: GrievanceStatus) => {
     setGrievances(prev => prev.map(g => g.id === id ? { ...g, status } : g));
+  };
+
+  const assignGrievance = (id: string, officer: string) => {
+    setGrievances(prev => prev.map(g => g.id === id ? { ...g, assignedTo: officer } : g));
   };
 
   return (
@@ -95,15 +123,16 @@ const App: React.FC = () => {
         ) : (
           <AuthorityDashboard 
             grievances={grievances} 
-            onUpdateStatus={updateGrievanceStatus} 
+            onUpdateStatus={updateGrievanceStatus}
+            onAssignGrievance={assignGrievance}
           />
         )}
       </main>
 
       <footer className="bg-slate-900 text-slate-400 py-8 text-center text-sm">
         <div className="max-w-7xl mx-auto px-4">
-          <p>© 2024 CivicCare AI. Empowering Governance with Intelligent Automation.</p>
-          <p className="mt-2">Connecting Citizens to Authorities through Gemini AI.</p>
+          <p>© 2024 CivicCare AI. Powered by Gemini Models.</p>
+          <p className="mt-2 text-slate-500">Aligned with CPGRAMS & India.gov.in standards for Digital Governance.</p>
         </div>
       </footer>
     </div>

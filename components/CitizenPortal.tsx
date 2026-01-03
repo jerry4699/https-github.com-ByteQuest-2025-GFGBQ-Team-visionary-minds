@@ -1,7 +1,7 @@
 
 import React, { useState, useRef } from 'react';
-import { Camera, Mic, MapPin, Send, Loader2, Info, CheckCircle2, Volume2, ShieldCheck } from 'lucide-react';
-import { analyzeGrievance, speakText, getPolicyInfo } from '../services/geminiService';
+import { Camera, Mic, MapPin, Send, Loader2, Info, CheckCircle2, Volume2, ShieldCheck, StopCircle, Mic2 } from 'lucide-react';
+import { analyzeGrievance, speakText, getPolicyInfo, transcribeAudio } from '../services/geminiService';
 import { Grievance, GrievanceStatus, Priority } from '../types';
 
 interface CitizenPortalProps {
@@ -48,6 +48,12 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
   const [policyInfo, setPolicyInfo] = useState<{ text: string, sources: any[] } | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   
+  // Voice Input State
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
@@ -80,6 +86,73 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
     );
   };
 
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        await handleTranscribe(audioBlob);
+        
+        // Stop all tracks to release microphone
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error('Error accessing microphone:', error);
+      alert('Could not access microphone. Please check permissions.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const handleTranscribe = async (audioBlob: Blob) => {
+    setIsTranscribing(true);
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(audioBlob);
+      reader.onloadend = async () => {
+        const base64String = reader.result as string;
+        // Strip the data:audio/webm;base64, prefix
+        const base64Data = base64String.split(',')[1];
+        
+        const transcription = await transcribeAudio(base64Data);
+        if (transcription) {
+          setDescription(prev => (prev ? `${prev} ${transcription}` : transcription));
+        }
+        setIsTranscribing(false);
+      };
+    } catch (error) {
+      console.error('Transcription failed:', error);
+      setIsTranscribing(false);
+      alert('Failed to transcribe audio. Please try again.');
+    }
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!description.trim()) return;
@@ -102,7 +175,9 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
         aiAnalysis: {
           sentiment: 'Neutral',
           suggestedResolution: analysis.suggestedResolution,
-          urgencyReason: analysis.urgencyReason
+          urgencyReason: analysis.urgencyReason,
+          language: analysis.language,
+          urgencyScore: analysis.urgencyScore
         }
       };
 
@@ -159,7 +234,7 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
           Report an Issue. <span className="text-blue-600">Empower Your City.</span>
         </h1>
         <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-          Use our AI-powered portal to report civic issues. We'll automatically route your complaint to the right department for faster resolution.
+          Use our AI-powered portal to report civic issues. Speak or type — we'll route your complaint to the right department instantly.
         </p>
       </section>
 
@@ -175,14 +250,46 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
         <div className="lg:col-span-2 space-y-6">
           <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
             <div className="p-6 space-y-4">
-              <label className="block text-sm font-semibold text-slate-700">Describe the issue</label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="E.g., Large pothole on Ring Road near Central Park..."
-                className="w-full h-40 p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all resize-none"
-                required
-              />
+              <div className="flex justify-between items-center">
+                <label className="block text-sm font-semibold text-slate-700">Describe the issue</label>
+                <div className="flex items-center gap-2">
+                   {isTranscribing && (
+                    <span className="text-xs font-medium text-blue-600 animate-pulse flex items-center gap-1">
+                      <Loader2 size={12} className="animate-spin" />
+                      Transcribing audio...
+                    </span>
+                   )}
+                   {isRecording && (
+                    <span className="text-xs font-medium text-red-600 animate-pulse flex items-center gap-1">
+                      <div className="w-2 h-2 rounded-full bg-red-600" />
+                      Listening...
+                    </span>
+                   )}
+                </div>
+              </div>
+              
+              <div className="relative">
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="Type here or click the microphone to speak..."
+                  className="w-full h-40 p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all resize-none pr-12"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={toggleRecording}
+                  disabled={isTranscribing}
+                  className={`absolute right-3 bottom-3 p-2 rounded-full transition-all ${
+                    isRecording 
+                      ? 'bg-red-500 text-white shadow-lg shadow-red-500/30 scale-110' 
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700'
+                  }`}
+                  title={isRecording ? "Stop Recording" : "Start Voice Input"}
+                >
+                  {isRecording ? <StopCircle size={20} /> : <Mic size={20} />}
+                </button>
+              </div>
 
               <div className="flex flex-wrap gap-4 items-center justify-between pt-2 border-t border-slate-50">
                 <div className="flex gap-2">
@@ -308,7 +415,7 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit }) => {
             <h4 className="font-bold text-slate-900">How it works</h4>
             <ul className="space-y-3">
               {[
-                { icon: <Mic size={16} />, text: 'Speak or type your grievance.' },
+                { icon: <Mic2 size={16} />, text: 'Speak or type your grievance.' },
                 { icon: <Camera size={16} />, text: 'AI analyzes visual evidence.' },
                 { icon: <ShieldCheck size={16} />, text: 'Prioritized by severity automatically.' },
                 { icon: <Send size={16} />, text: 'Sent to the correct department.' }

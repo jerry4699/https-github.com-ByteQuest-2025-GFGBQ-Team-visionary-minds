@@ -28,10 +28,13 @@ export interface Grievance {
   timestamp: string;
   department: string;
   evidenceUrls: string[];
+  assignedTo?: string;
   aiAnalysis?: {
     sentiment: string;
     suggestedResolution: string;
     urgencyReason: string;
+    language?: string;
+    urgencyScore: number; // 0-100 score based on risk assessment
   };
 }
 
