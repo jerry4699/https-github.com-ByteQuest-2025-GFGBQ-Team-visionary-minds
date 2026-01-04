@@ -29,15 +29,19 @@ export const analyzeGrievance = async (text: string, images: string[] = []) => {
        - 40-69: Quality of life issue or inconvenience (MEDIUM).
        - 0-39: Information request or minor suggestion (LOW).
 
-    3. Image Analysis (Safe & Assistive):
-       - If images are provided, check if they appear VISUALLY CONSISTENT with the text complaint (e.g., if text says "pothole", is there a road/pothole?).
+    3. Explainability & Context:
+       - Extract 3-5 short, punchy "Risk Factors" (bullet points) explaining WHY the score was given.
+       - Critical Facility Check: Does this issue affect a school, hospital, metro station, or major government building? (Boolean).
+
+    4. Image Analysis (Safe & Assistive):
+       - If images are provided, check if they appear VISUALLY CONSISTENT with the text complaint.
        - Check for quality issues (Blurry, Too Dark, Unclear).
        - IMPORTANT: Do NOT claim to verify authenticity or detect AI-generated images. Focus only on relevance and clarity.
 
-    4. Language Detection:
+    5. Language Detection:
        - Detect the language of the grievance text (e.g., English, Hindi, Tamil, Marathi).
     
-    5. Output: JSON format.
+    6. Output: JSON format.
     
     Grievance text: ${text}
   ` }];
@@ -69,6 +73,12 @@ export const analyzeGrievance = async (text: string, images: string[] = []) => {
           department: { type: Type.STRING },
           summary: { type: Type.STRING },
           urgencyReason: { type: Type.STRING },
+          riskFactors: { 
+            type: Type.ARRAY, 
+            items: { type: Type.STRING },
+            description: "List of 3-5 short reasons for the urgency score" 
+          },
+          isCriticalFacility: { type: Type.BOOLEAN, description: "True if near school, hospital, etc." },
           suggestedResolution: { type: Type.STRING },
           language: { type: Type.STRING, description: "The detected language (e.g., English, Hindi, Tamil)" },
           urgencyScore: { type: Type.INTEGER, description: "Calculated risk score from 0-100" },
@@ -79,10 +89,9 @@ export const analyzeGrievance = async (text: string, images: string[] = []) => {
                 quality: { type: Type.STRING, description: "Good, Blurry, Dark, Low Resolution, or N/A" },
                 description: { type: Type.STRING, description: "Brief note on image content vs complaint context." }
             },
-            // Make imageAnalysis optional in schema validation but encouraged
           }
         },
-        required: ["category", "priority", "department", "summary", "urgencyReason", "suggestedResolution", "language", "urgencyScore"]
+        required: ["category", "priority", "department", "summary", "urgencyReason", "riskFactors", "suggestedResolution", "language", "urgencyScore"]
       },
       thinkingConfig: { thinkingBudget: 32768 }
     }

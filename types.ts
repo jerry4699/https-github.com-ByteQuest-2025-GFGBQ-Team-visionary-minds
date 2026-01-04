@@ -38,10 +38,13 @@ export interface Grievance {
   department: string;
   evidenceUrls: string[];
   assignedTo?: string;
+  resolutionNote?: string; // Human-in-the-loop requirement
   aiAnalysis?: {
     sentiment: string;
     suggestedResolution: string;
     urgencyReason: string;
+    riskFactors?: string[]; // Bullet points for explainability
+    isCriticalFacility?: boolean; // Context awareness
     language?: string;
     urgencyScore: number; 
     imageAnalysis?: {

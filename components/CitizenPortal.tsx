@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Mic, MapPin, Send, Loader2, Info, CheckCircle2, Volume2, ShieldCheck, StopCircle, Mic2, Square, Clock, ChevronRight, Phone, Image as ImageIcon, X, Languages } from 'lucide-react';
+import { Camera, Mic, MapPin, Send, Loader2, Info, CheckCircle2, Volume2, ShieldCheck, StopCircle, Mic2, Square, Clock, ChevronRight, Phone, Image as ImageIcon, X, Languages, AlertTriangle } from 'lucide-react';
 import { analyzeGrievance, speakText, getPolicyInfo, transcribeAudio } from '../services/geminiService';
 import { Grievance, GrievanceStatus, Priority } from '../types';
 
@@ -187,7 +187,13 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Safeguard: Check description length
     if (!description.trim()) return;
+    if (description.trim().length < 15) {
+        alert("Please provide a more detailed description (at least 15 characters) to help us help you.");
+        return;
+    }
 
     setIsSubmitting(true);
     setLastAnalysis(null);
@@ -214,6 +220,8 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
           sentiment: 'Neutral',
           suggestedResolution: analysis.suggestedResolution,
           urgencyReason: analysis.urgencyReason,
+          riskFactors: analysis.riskFactors,
+          isCriticalFacility: analysis.isCriticalFacility,
           language: analysis.language,
           urgencyScore: analysis.urgencyScore,
           imageAnalysis: analysis.imageAnalysis
@@ -375,7 +383,7 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Type here or click the microphone to speak..."
+                  placeholder="Type here or click the microphone to speak... (Be specific, e.g., 'Large pothole on MG Road near the school')"
                   className="w-full h-32 p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all resize-none pr-12"
                   required
                 />
@@ -393,6 +401,14 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
                   {isRecording ? <StopCircle size={20} /> : <Mic size={20} />}
                 </button>
               </div>
+               
+               {/* Quality Safeguard Warning */}
+               {description.length > 0 && description.length < 15 && (
+                   <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 p-2 rounded-lg border border-amber-100 animate-in fade-in">
+                       <AlertTriangle size={14} />
+                       Please provide more details to ensure accurate AI classification.
+                   </div>
+               )}
 
                {/* Optional Phone Number */}
                <div>
@@ -444,8 +460,8 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
 
                 <button
                   type="submit"
-                  disabled={isSubmitting || !description}
-                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white px-6 py-2 rounded-lg font-semibold flex items-center gap-2 transition-all shadow-lg shadow-blue-500/20"
+                  disabled={isSubmitting || description.length < 15}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-6 py-2 rounded-lg font-semibold flex items-center gap-2 transition-all shadow-lg shadow-blue-500/20"
                 >
                   {isSubmitting ? (
                     <>
