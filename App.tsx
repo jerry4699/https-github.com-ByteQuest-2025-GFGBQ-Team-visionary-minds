@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import CitizenPortal from './components/CitizenPortal';
 import AuthorityDashboard from './components/AuthorityDashboard';
@@ -33,7 +32,7 @@ const MOCK_GRIEVANCES: Grievance[] = [
   },
   {
     id: 'G-1025',
-    citizenName: 'User Guest',
+    citizenName: 'Anjali Gupta',
     category: 'Public Health & Family Welfare',
     description: 'Garbage collection has not happened in our society for the last 4 days. Foul smell spreading.',
     priority: Priority.MEDIUM,

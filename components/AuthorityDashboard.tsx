@@ -8,7 +8,7 @@ import {
   AlertCircle, CheckCircle2, Clock, Search, 
   Map as MapIcon, TrendingUp, Users, XCircle, ShieldAlert,
   MapPin, Lightbulb, ChevronDown, ChevronUp, Image as ImageIcon, Phone, Navigation, BrainCircuit, X,
-  Briefcase
+  Briefcase, Building2, UserCheck, Mail, Award, ChevronRight
 } from 'lucide-react';
 import L from 'leaflet';
 import { Grievance, GrievanceStatus, Priority, Jurisdiction } from '../types';
@@ -45,14 +45,23 @@ const CITY_CENTERS: Record<string, { lat: number, lng: number }> = {
   'Noida': { lat: 28.5355, lng: 77.3910 }
 };
 
-const MOCK_OFFICERS = [
-  'Rajesh Kumar', 
-  'Sita Verma', 
-  'Amit Singh', 
-  'Vikram Malhotra', 
-  'Priya Patel', 
-  'Anjali Desai'
-];
+interface OfficerProfile {
+  name: string;
+  role: string;
+  department: string;
+  email: string;
+  phone: string;
+  specialization: string;
+}
+
+const OFFICER_PROFILES: Record<string, OfficerProfile> = {
+  'Rajesh Kumar': { name: 'Rajesh Kumar', role: 'Senior Engineer', department: 'PWD', email: 'rajesh.k@civic.gov.in', phone: '+91 98765 11223', specialization: 'Road Maintenance' },
+  'Sita Verma': { name: 'Sita Verma', role: 'Health Inspector', department: 'Municipal Corp', email: 'sita.v@civic.gov.in', phone: '+91 98765 22334', specialization: 'Sanitation & Hygiene' },
+  'Amit Singh': { name: 'Amit Singh', role: 'Junior Engineer', department: 'Jal Board', email: 'amit.s@civic.gov.in', phone: '+91 98765 33445', specialization: 'Water Supply Networks' },
+  'Vikram Malhotra': { name: 'Vikram Malhotra', role: 'Chief Officer', department: 'Electricity Board', email: 'vikram.m@civic.gov.in', phone: '+91 98765 44556', specialization: 'Grid Management' },
+  'Priya Patel': { name: 'Priya Patel', role: 'Zonal Commissioner', department: 'Municipal Corp', email: 'priya.p@civic.gov.in', phone: '+91 98765 55667', specialization: 'Urban Planning' },
+  'Anjali Desai': { name: 'Anjali Desai', role: 'Field Supervisor', department: 'Public Works', email: 'anjali.d@civic.gov.in', phone: '+91 98765 66778', specialization: 'Rapid Response' }
+};
 
 // Haversine formula to calculate distance
 const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -82,6 +91,12 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
   // AI Analysis Modal State
   const [analysisModalOpen, setAnalysisModalOpen] = useState(false);
   const [selectedGrievance, setSelectedGrievance] = useState<Grievance | null>(null);
+
+  // Officer Modal State
+  const [officerModalOpen, setOfficerModalOpen] = useState(false);
+  const [selectedOfficer, setSelectedOfficer] = useState<OfficerProfile | null>(null);
+  const [targetGrievanceId, setTargetGrievanceId] = useState<string | null>(null);
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
 
   // Leaflet Map State
   const mapRef = useRef<HTMLDivElement>(null);
@@ -313,6 +328,36 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
   const closeAnalysisModal = () => {
     setAnalysisModalOpen(false);
     setSelectedGrievance(null);
+  };
+
+  // Officer Modal Logic
+  const handleOfficerClick = (officerName: string, grievanceId: string | null = null) => {
+    if (OFFICER_PROFILES[officerName]) {
+      setSelectedOfficer(OFFICER_PROFILES[officerName]);
+      setTargetGrievanceId(grievanceId);
+      setOfficerModalOpen(true);
+      setActiveDropdown(null);
+    }
+  };
+
+  const handleAssignConfirm = () => {
+    if (targetGrievanceId && selectedOfficer) {
+      onAssignGrievance(targetGrievanceId, selectedOfficer.name);
+      setOfficerModalOpen(false);
+      setSelectedOfficer(null);
+      setTargetGrievanceId(null);
+    }
+  };
+
+  const getOfficerWorkload = (officerName: string) => {
+    const assigned = grievances.filter(g => g.assignedTo === officerName);
+    return {
+      total: assigned.length,
+      pending: assigned.filter(g => g.status === GrievanceStatus.PENDING).length,
+      inProgress: assigned.filter(g => g.status === GrievanceStatus.IN_PROGRESS).length,
+      resolved: assigned.filter(g => g.status === GrievanceStatus.RESOLVED).length,
+      assignedGrievances: assigned
+    };
   };
 
   return (
@@ -622,22 +667,60 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
                                                         </div>
                                                     </div>
 
+                                                    {/* Department Details */}
+                                                    <div>
+                                                        <h4 className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-2">Department Assignment</h4>
+                                                        <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm text-sm">
+                                                            <div className="flex items-center gap-2 mb-1 font-semibold text-slate-900">
+                                                                <Building2 size={14} className="text-indigo-500" />
+                                                                {g.department}
+                                                            </div>
+                                                            <div className="text-xs text-slate-500 mt-1 pl-6">
+                                                                <span className="font-medium">Category:</span> {g.category}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
                                                     {/* Admin Assignment Section */}
                                                     {userRole === 'admin' && (
-                                                        <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+                                                        <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm relative">
                                                             <h4 className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-2 flex items-center gap-1">
                                                                 <Briefcase size={12} /> Assign Officer
                                                             </h4>
-                                                            <select 
-                                                                className="w-full bg-slate-50 border border-slate-200 text-sm rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-blue-500 font-medium text-slate-700"
-                                                                value={g.assignedTo || ''}
-                                                                onChange={(e) => onAssignGrievance(g.id, e.target.value)}
-                                                            >
-                                                                <option value="">Unassigned</option>
-                                                                {MOCK_OFFICERS.map(officer => (
-                                                                    <option key={officer} value={officer}>{officer}</option>
-                                                                ))}
-                                                            </select>
+                                                            <div className="relative">
+                                                                <button
+                                                                    className="w-full bg-slate-50 border border-slate-200 text-sm rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-blue-500 font-medium text-slate-700 flex items-center justify-between"
+                                                                    onClick={() => setActiveDropdown(activeDropdown === g.id ? null : g.id)}
+                                                                >
+                                                                    <span>{g.assignedTo || 'Unassigned'}</span>
+                                                                    <ChevronDown size={14} />
+                                                                </button>
+                                                                
+                                                                {/* Custom Dropdown List */}
+                                                                {activeDropdown === g.id && (
+                                                                    <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                                                                        {Object.values(OFFICER_PROFILES).map((officer) => (
+                                                                            <div
+                                                                                key={officer.name}
+                                                                                className="px-3 py-2 hover:bg-slate-50 cursor-pointer flex items-center justify-between group"
+                                                                                onClick={() => handleOfficerClick(officer.name, g.id)}
+                                                                            >
+                                                                                <div className="text-sm font-medium text-slate-700">{officer.name}</div>
+                                                                                <div className="text-xs text-slate-400 group-hover:text-blue-500">View Profile</div>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+
+                                                                {g.assignedTo && (
+                                                                    <button 
+                                                                        onClick={() => handleOfficerClick(g.assignedTo!)}
+                                                                        className="text-xs text-blue-600 font-medium mt-2 flex items-center gap-1 hover:underline"
+                                                                    >
+                                                                        <UserCheck size={12} /> View Assigned Profile
+                                                                    </button>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                     )}
 
@@ -857,6 +940,126 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
                 </button>
             </div>
             </div>
+        </div>
+      )}
+
+      {/* Officer Profile Modal */}
+      {officerModalOpen && selectedOfficer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200">
+             <div className="bg-slate-900 p-6 text-white relative">
+                 <button 
+                   onClick={() => setOfficerModalOpen(false)} 
+                   className="absolute top-4 right-4 text-slate-400 hover:text-white transition-colors"
+                 >
+                   <X size={20} />
+                 </button>
+                 <div className="flex items-center gap-4">
+                    <div className="w-16 h-16 rounded-full bg-blue-600 flex items-center justify-center text-2xl font-bold border-2 border-white shadow-lg">
+                        {selectedOfficer.name.charAt(0)}
+                    </div>
+                    <div>
+                        <h3 className="text-xl font-bold">{selectedOfficer.name}</h3>
+                        <p className="text-blue-200 text-sm flex items-center gap-1">
+                          <Briefcase size={12} /> {selectedOfficer.role}
+                        </p>
+                    </div>
+                 </div>
+             </div>
+
+             <div className="p-6 space-y-6">
+                <div className="grid grid-cols-2 gap-4">
+                   <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                      <div className="text-xs text-slate-400 font-bold uppercase mb-1">Specialization</div>
+                      <div className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                        <Award size={14} className="text-orange-500" />
+                        {selectedOfficer.specialization}
+                      </div>
+                   </div>
+                   <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                      <div className="text-xs text-slate-400 font-bold uppercase mb-1">Department</div>
+                      <div className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                        <Building2 size={14} className="text-blue-500" />
+                        {selectedOfficer.department}
+                      </div>
+                   </div>
+                </div>
+
+                <div className="space-y-3">
+                   <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                     <Users size={16} className="text-slate-400" /> Contact Information
+                   </h4>
+                   <div className="space-y-2 text-sm text-slate-600">
+                      <div className="flex items-center gap-3">
+                         <Mail size={14} className="text-slate-400" />
+                         {selectedOfficer.email}
+                      </div>
+                      <div className="flex items-center gap-3">
+                         <Phone size={14} className="text-slate-400" />
+                         {selectedOfficer.phone}
+                      </div>
+                   </div>
+                </div>
+
+                <div className="border-t border-slate-100 pt-4">
+                   <h4 className="text-sm font-bold text-slate-900 mb-3 flex items-center gap-2">
+                     <TrendingUp size={16} className="text-slate-400" /> Performance & Workload
+                   </h4>
+                   {(() => {
+                      const load = getOfficerWorkload(selectedOfficer.name);
+                      return (
+                        <div className="space-y-4">
+                           <div className="grid grid-cols-3 gap-2 text-center">
+                              <div className="bg-blue-50 p-2 rounded-lg border border-blue-100">
+                                 <div className="text-xl font-bold text-blue-700">{load.total}</div>
+                                 <div className="text-[10px] font-bold text-blue-400 uppercase">Total Assigned</div>
+                              </div>
+                              <div className="bg-amber-50 p-2 rounded-lg border border-amber-100">
+                                 <div className="text-xl font-bold text-amber-700">{load.pending + load.inProgress}</div>
+                                 <div className="text-[10px] font-bold text-amber-400 uppercase">Active</div>
+                              </div>
+                              <div className="bg-green-50 p-2 rounded-lg border border-green-100">
+                                 <div className="text-xl font-bold text-green-700">{load.resolved}</div>
+                                 <div className="text-[10px] font-bold text-green-400 uppercase">Resolved</div>
+                              </div>
+                           </div>
+                           
+                           {load.assignedGrievances.length > 0 && (
+                             <div className="bg-slate-50 rounded-lg p-3 max-h-32 overflow-y-auto">
+                                <p className="text-xs font-bold text-slate-400 uppercase mb-2">Current Assignments</p>
+                                {load.assignedGrievances.map(g => (
+                                  <div key={g.id} className="text-xs flex justify-between items-center py-1 border-b border-slate-100 last:border-0">
+                                    <span className="truncate max-w-[150px] text-slate-600">{g.description}</span>
+                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${PRIORITY_COLORS[g.priority]}`}>
+                                      {g.priority}
+                                    </span>
+                                  </div>
+                                ))}
+                             </div>
+                           )}
+                        </div>
+                      );
+                   })()}
+                </div>
+             </div>
+
+             <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
+                <button 
+                  onClick={() => setOfficerModalOpen(false)}
+                  className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50 transition-colors text-sm"
+                >
+                  Close
+                </button>
+                {targetGrievanceId && (
+                   <button 
+                     onClick={handleAssignConfirm}
+                     className="px-4 py-2 bg-slate-900 text-white rounded-lg font-medium hover:bg-slate-800 transition-colors text-sm flex items-center gap-2 shadow-sm"
+                   >
+                     Confirm Assignment <ChevronRight size={14} />
+                   </button>
+                )}
+             </div>
+          </div>
         </div>
       )}
     </div>
