@@ -8,7 +8,7 @@ import {
   AlertCircle, CheckCircle2, Clock, Search, 
   Map as MapIcon, TrendingUp, Users, XCircle, ShieldAlert,
   MapPin, Lightbulb, ChevronDown, ChevronUp, Image as ImageIcon, Phone, Navigation, BrainCircuit, X,
-  Briefcase, Building2, UserCheck, Mail, Award, ChevronRight
+  Briefcase, Building2, UserCheck, Mail, Award, ChevronRight, Bell, Zap
 } from 'lucide-react';
 import L from 'leaflet';
 import { Grievance, GrievanceStatus, Priority, Jurisdiction } from '../types';
@@ -77,6 +77,15 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
   return d;
 };
 
+// Internal Interface for Unified Alerts
+interface DashboardAlert {
+  id: string;
+  grievance: Grievance;
+  type: 'CRITICAL' | 'SLA' | 'BOTH';
+  message: string;
+  daysOverdue?: number;
+}
+
 const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({ 
   grievances, 
   onUpdateStatus, 
@@ -98,12 +107,24 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
   const [targetGrievanceId, setTargetGrievanceId] = useState<string | null>(null);
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
 
+  // Notification State
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showToast, setShowToast] = useState(false);
+
   // Leaflet Map State
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const routeLayerRef = useRef<L.Polyline | null>(null);
-  const [routeInfo, setRouteInfo] = useState<{ distance: string, duration: string } | null>(null);
+  
+  // Enhanced Route Info State
+  const [routeInfo, setRouteInfo] = useState<{ 
+    distance: string, 
+    duration: string,
+    origin: string,
+    destination: string,
+    traffic: string
+  } | null>(null);
 
   // 1. Filter Data by Jurisdiction
   const relevantGrievances = useMemo(() => {
@@ -116,26 +137,73 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
     return grievances;
   }, [grievances, userRole, jurisdiction]);
 
-  // 2. Statistics Calculation
-  const stats = useMemo(() => {
+  // 2. Statistics & Alert Logic
+  const { stats, alerts } = useMemo(() => {
     const total = relevantGrievances.length;
     const pending = relevantGrievances.filter(g => g.status === GrievanceStatus.PENDING).length;
     const inProgress = relevantGrievances.filter(g => g.status === GrievanceStatus.IN_PROGRESS).length;
     const resolved = relevantGrievances.filter(g => g.status === GrievanceStatus.RESOLVED).length;
     const critical = relevantGrievances.filter(g => g.priority === Priority.CRITICAL || g.priority === Priority.HIGH).length;
     
-    // Simulate Escalations (e.g., pending > 7 days)
-    const escalated = relevantGrievances.filter(g => {
+    // Simulate Avg Resolution Time
+    const avgResolutionHours = resolved > 0 ? 48 : 0; 
+
+    // Generate Unified Alerts
+    const activeAlerts: DashboardAlert[] = [];
+    let escalatedCount = 0;
+
+    relevantGrievances.forEach(g => {
+        if (g.status === GrievanceStatus.RESOLVED || g.status === GrievanceStatus.REJECTED) return;
+
         const diffTime = Math.abs(new Date().getTime() - new Date(g.timestamp).getTime());
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-        return (g.status === GrievanceStatus.PENDING || g.status === GrievanceStatus.IN_PROGRESS) && diffDays > 7;
-    }).length;
+        const isSlaBreach = diffDays > 7;
+        const isCritical = g.priority === Priority.CRITICAL || (g.aiAnalysis?.urgencyScore || 0) >= 80;
 
-    // Simulate Avg Resolution Time
-    const avgResolutionHours = resolved > 0 ? 48 : 0; // Simulated constant for demo
+        if (isSlaBreach) escalatedCount++;
 
-    return { total, pending, inProgress, resolved, critical, escalated, avgResolutionHours };
+        if (isSlaBreach || isCritical) {
+            let type: 'CRITICAL' | 'SLA' | 'BOTH' = 'SLA';
+            let message = `Overdue by ${diffDays - 7} days`;
+
+            if (isCritical && isSlaBreach) {
+                type = 'BOTH';
+                message = `Critical Risk & Overdue (+${diffDays - 7} days)`;
+            } else if (isCritical) {
+                type = 'CRITICAL';
+                message = 'High Urgency / Critical Priority detected';
+            }
+
+            activeAlerts.push({
+                id: g.id,
+                grievance: g,
+                type,
+                message,
+                daysOverdue: isSlaBreach ? diffDays - 7 : undefined
+            });
+        }
+    });
+
+    // Sort Alerts: BOTH > CRITICAL > SLA
+    activeAlerts.sort((a, b) => {
+        const score = (type: string) => type === 'BOTH' ? 3 : type === 'CRITICAL' ? 2 : 1;
+        return score(b.type) - score(a.type);
+    });
+
+    return { 
+        stats: { total, pending, inProgress, resolved, critical, escalated: escalatedCount, avgResolutionHours },
+        alerts: activeAlerts
+    };
   }, [relevantGrievances]);
+
+  // Toast Trigger Effect
+  useEffect(() => {
+    if (alerts.length > 0) {
+        setShowToast(true);
+        const timer = setTimeout(() => setShowToast(false), 8000); // Auto dismiss after 8s
+        return () => clearTimeout(timer);
+    }
+  }, [alerts.length]); // Triggers when count changes (e.g. new grievance added)
 
   // 3. Admin: City-wise Aggregation Data
   const cityStats = useMemo(() => {
@@ -149,14 +217,14 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
         if (g.status !== GrievanceStatus.RESOLVED) cityMap[g.city].active++;
         if (g.priority === Priority.CRITICAL) cityMap[g.city].critical++;
         
-        // Mock escalation logic
+        // SLA breach check for map aggregation
         const diffTime = Math.abs(new Date().getTime() - new Date(g.timestamp).getTime());
         if (diffTime > 7 * 24 * 60 * 60 * 1000 && g.status !== GrievanceStatus.RESOLVED) {
             cityMap[g.city].escalations++;
         }
     });
 
-    // Populate mock data for demo visual completeness (Hardcoded as per prompt req)
+    // Populate mock data for demo visual completeness
     if (jurisdiction?.state === 'Maharashtra') {
        if(!cityMap['Nagpur']) cityMap['Nagpur'] = { city: 'Nagpur', active: 42, critical: 6, avgRes: '3.2 days', escalations: 4 };
        if(!cityMap['Pune']) cityMap['Pune'] = { city: 'Pune', active: 58, critical: 3, avgRes: '2.1 days', escalations: 1 };
@@ -166,7 +234,6 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
        if(!cityMap['North Delhi']) cityMap['North Delhi'] = { city: 'North Delhi', active: 62, critical: 11, avgRes: '4.1 days', escalations: 7 };
     }
 
-    // Merge existing calculations with mock if any overlap (prefer real data if > 0)
     return Object.values(cityMap);
   }, [relevantGrievances, userRole, jurisdiction]);
 
@@ -211,13 +278,12 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
 
     mapInstanceRef.current = map;
 
-    // Fix for map rendering issues (gray areas) when container animates
+    // Fix for map rendering issues
     const resizeObserver = new ResizeObserver(() => {
         map.invalidateSize();
     });
     resizeObserver.observe(mapRef.current);
 
-    // Initial invalidation after a short delay to ensure container is fully rendered
     setTimeout(() => {
         map.invalidateSize();
     }, 100);
@@ -262,7 +328,6 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    // Clear previous route
     if (routeLayerRef.current) {
         routeLayerRef.current.remove();
         routeLayerRef.current = null;
@@ -273,12 +338,12 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
         
         if (selectedGrievance && selectedGrievance.location) {
             const city = selectedGrievance.city || 'New Delhi';
-            const origin = CITY_CENTERS[city] || CITY_CENTERS['New Delhi'];
+            const originObj = CITY_CENTERS[city] || CITY_CENTERS['New Delhi'];
+            const originName = `${city} Operations Center`;
             
-            const startLatLng: [number, number] = [origin.lat, origin.lng];
+            const startLatLng: [number, number] = [originObj.lat, originObj.lng];
             const endLatLng: [number, number] = [selectedGrievance.location.lat, selectedGrievance.location.lng];
 
-            // Draw line
             const polyline = L.polyline([startLatLng, endLatLng], {
                 color: '#2563eb',
                 weight: 4,
@@ -287,29 +352,34 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
             }).addTo(map);
 
             routeLayerRef.current = polyline;
-
-            // Fit bounds to show route
             map.fitBounds(polyline.getBounds(), { padding: [50, 50] });
 
-            // Calculate Metrics
-            const distKm = calculateDistance(origin.lat, origin.lng, selectedGrievance.location.lat, selectedGrievance.location.lng);
-            // Assume avg speed 30km/h in city
-            const durationHrs = distKm / 30;
+            const distKm = calculateDistance(originObj.lat, originObj.lng, selectedGrievance.location.lat, selectedGrievance.location.lng);
+            
+            const trafficStates = ['Clear', 'Moderate', 'Heavy'];
+            const traffic = trafficStates[Math.floor(Math.random() * trafficStates.length)];
+            
+            let speed = 30;
+            if (traffic === 'Clear') speed = 40;
+            if (traffic === 'Heavy') speed = 15;
+
+            const durationHrs = distKm / speed;
             const durationMins = Math.round(durationHrs * 60);
 
             setRouteInfo({
                 distance: `${distKm.toFixed(1)} km`,
                 duration: durationMins > 60 
                     ? `${Math.floor(durationMins/60)}h ${durationMins%60}m` 
-                    : `${durationMins} mins`
+                    : `${durationMins} mins`,
+                origin: originName,
+                destination: selectedGrievance.location.address || 'Grievance Location',
+                traffic: traffic
             });
             
-            // Re-invalidate size to ensure map is sharp after fitBounds
             setTimeout(() => map.invalidateSize(), 50);
         }
     } else {
         setRouteInfo(null);
-        // Reset view if needed, or leave as is
         if (jurisdiction?.city && CITY_CENTERS[jurisdiction.city]) {
              map.flyTo([CITY_CENTERS[jurisdiction.city].lat, CITY_CENTERS[jurisdiction.city].lng], 13);
         }
@@ -330,7 +400,6 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
     setSelectedGrievance(null);
   };
 
-  // Officer Modal Logic
   const handleOfficerClick = (officerName: string, grievanceId: string | null = null) => {
     if (OFFICER_PROFILES[officerName]) {
       setSelectedOfficer(OFFICER_PROFILES[officerName]);
@@ -360,13 +429,55 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
     };
   };
 
+  const handleNotificationClick = (id: string) => {
+      setExpandedRow(id);
+      setShowNotifications(false);
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-700 relative pb-12">
-      {/* CSS Fix for Tailwind-Leaflet Conflict */}
       <style>{`
         .leaflet-pane img { max-width: none !important; }
         .leaflet-container { z-index: 0; font-family: inherit; }
       `}</style>
+
+      {/* Unified Alert Toast Notification */}
+      {showToast && (
+        <div className="fixed top-24 right-4 z-50 bg-white border-l-4 border-red-500 rounded-lg shadow-2xl p-4 max-w-sm animate-in slide-in-from-right duration-500">
+            <div className="flex items-start gap-3">
+                <div className="bg-red-100 p-2 rounded-full shrink-0">
+                    <ShieldAlert className="text-red-600" size={20} />
+                </div>
+                <div>
+                    <h4 className="font-bold text-slate-900 text-sm">Action Required</h4>
+                    <p className="text-xs text-slate-600 mt-1">
+                        {alerts.length} urgent issues detected in your jurisdiction.
+                    </p>
+                    <div className="flex gap-2 mt-2">
+                        {alerts.some(a => a.type === 'CRITICAL') && (
+                            <span className="text-[10px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded border border-red-200">
+                                Critical Detected
+                            </span>
+                        )}
+                        {alerts.some(a => a.type === 'SLA') && (
+                            <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">
+                                SLA Breach
+                            </span>
+                        )}
+                    </div>
+                    <button 
+                        onClick={() => { setShowNotifications(true); setShowToast(false); }}
+                        className="text-xs font-bold text-blue-600 mt-2 hover:underline block"
+                    >
+                        View Alert List
+                    </button>
+                </div>
+                <button onClick={() => setShowToast(false)} className="text-slate-400 hover:text-slate-600">
+                    <X size={14} />
+                </button>
+            </div>
+        </div>
+      )}
       
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-200 pb-6">
@@ -383,14 +494,79 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
               : 'Monitoring administrative performance and public satisfaction.'}
           </p>
         </div>
-        
+
+        {/* Action Bar: Notification Bell */}
         <div className="flex items-center gap-3">
-            <span className="px-3 py-1 bg-yellow-50 text-yellow-700 text-xs font-bold uppercase tracking-widest border border-yellow-200 rounded-full">
-                Pilot Simulation
-            </span>
-            <span className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-bold uppercase tracking-widest border border-slate-200 rounded-full">
-                Sample Data
-            </span>
+            <div className="relative">
+                <button 
+                    onClick={() => setShowNotifications(!showNotifications)}
+                    className={`p-2.5 rounded-full border transition-colors relative ${
+                        showNotifications 
+                        ? 'bg-blue-50 border-blue-200 text-blue-600' 
+                        : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                    }`}
+                >
+                    <Bell size={20} />
+                    {alerts.length > 0 && (
+                        <span className="absolute top-0 right-0 w-3 h-3 bg-red-500 rounded-full border-2 border-white animate-pulse"></span>
+                    )}
+                </button>
+                
+                {/* Unified Notification Dropdown */}
+                {showNotifications && (
+                    <div className="absolute right-0 mt-2 w-96 bg-white rounded-xl shadow-xl border border-slate-200 z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                        <div className="p-3 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Active Alerts</span>
+                            {alerts.length > 0 && <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{alerts.length} New</span>}
+                        </div>
+                        <div className="max-h-80 overflow-y-auto">
+                            {alerts.length > 0 ? (
+                                alerts.map(alert => (
+                                    <div 
+                                        key={alert.id} 
+                                        onClick={() => handleNotificationClick(alert.id)}
+                                        className={`p-3 border-b border-slate-50 cursor-pointer transition-colors group relative ${
+                                            alert.type === 'CRITICAL' || alert.type === 'BOTH' ? 'bg-red-50/30 hover:bg-red-50' : 'hover:bg-amber-50'
+                                        }`}
+                                    >
+                                        <div className="flex justify-between items-start mb-1">
+                                            <div className="flex items-center gap-2">
+                                                {alert.type === 'CRITICAL' || alert.type === 'BOTH' ? (
+                                                    <ShieldAlert size={14} className="text-red-600" />
+                                                ) : (
+                                                    <Clock size={14} className="text-amber-600" />
+                                                )}
+                                                <span className="text-xs font-bold text-slate-900">{alert.id}</span>
+                                            </div>
+                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                                alert.type === 'CRITICAL' ? 'bg-red-100 text-red-700' :
+                                                alert.type === 'BOTH' ? 'bg-red-900 text-white' :
+                                                'bg-amber-100 text-amber-700'
+                                            }`}>
+                                                {alert.type === 'BOTH' ? 'CRITICAL & LATE' : alert.type}
+                                            </span>
+                                        </div>
+                                        <p className="text-xs text-slate-600 truncate mb-1 pl-6">{alert.grievance.description}</p>
+                                        <div className="flex items-center gap-2 text-[10px] text-slate-400 pl-6">
+                                            <span>{alert.grievance.city}</span>
+                                            <span>•</span>
+                                            <span className="text-slate-500 font-medium">{alert.message}</span>
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="p-8 text-center text-slate-400 text-xs">
+                                    <CheckCircle2 className="mx-auto mb-2 opacity-50" size={24} />
+                                    All clear. No immediate alerts.
+                                </div>
+                            )}
+                        </div>
+                        <div className="p-2 bg-slate-50 border-t border-slate-100 text-center">
+                            <button onClick={() => setShowNotifications(false)} className="text-xs text-blue-600 font-medium hover:underline">Close Notifications</button>
+                        </div>
+                    </div>
+                )}
+            </div>
         </div>
       </div>
 
@@ -479,7 +655,50 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
                 </div>
             </div>
 
-            {/* 2. City-Wise Stats Table */}
+            {/* 2. City-Wise Analytics Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {cityStats.map((city, idx) => (
+                    <div key={idx} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600">
+                                    <Building2 size={20} />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-slate-900">{city.city}</h3>
+                                    <p className="text-xs text-slate-500 font-medium">Operations Center</p>
+                                </div>
+                            </div>
+                            <div className={`px-2 py-1 rounded text-xs font-bold uppercase tracking-wide border ${
+                                city.critical > 5 ? 'bg-red-50 text-red-700 border-red-100' : 'bg-green-50 text-green-700 border-green-100'
+                            }`}>
+                                {city.critical > 5 ? 'High Alert' : 'Stable'}
+                            </div>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                                <p className="text-xs text-slate-500 font-medium uppercase">Active</p>
+                                <p className="text-2xl font-bold text-slate-900">{city.active}</p>
+                            </div>
+                            <div className="space-y-1">
+                                <p className="text-xs text-red-600/80 font-medium uppercase">Critical</p>
+                                <p className="text-2xl font-bold text-red-600">{city.critical}</p>
+                            </div>
+                            <div className="space-y-1">
+                                <p className="text-xs text-slate-500 font-medium uppercase">Avg Time</p>
+                                <p className="text-2xl font-bold text-slate-900">{city.avgRes}</p>
+                            </div>
+                            <div className="space-y-1">
+                                <p className="text-xs text-orange-600/80 font-medium uppercase">Escalated</p>
+                                <p className="text-2xl font-bold text-orange-600">{city.escalations}</p>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* 3. City-Wise Stats Table */}
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="p-6 border-b border-slate-50 bg-slate-50/50 flex justify-between items-center">
                     <h3 className="font-bold text-slate-900">City-Wise Performance Oversight</h3>
@@ -573,7 +792,7 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
                       <tr>
                          <th className="px-6 py-3">Issue Detail</th>
                          <th className="px-6 py-3">Urgency</th>
-                         <th className="px-6 py-3">Dept</th>
+                         <th className="px-6 py-3">Dept & Assignee</th>
                          <th className="px-6 py-3">Action</th>
                          <th className="px-6 py-3 w-10"></th> 
                       </tr>
@@ -603,7 +822,21 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
                                             )}
                                         </div>
                                     </td>
-                                    <td className="px-6 py-4 text-xs font-medium text-slate-600">{g.department}</td>
+                                    <td className="px-6 py-4 text-xs font-medium text-slate-600">
+                                        <div className="font-semibold text-slate-900">{g.department}</div>
+                                        {g.assignedTo ? (
+                                            <div className="flex items-center gap-1 mt-1 text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md w-fit border border-blue-100">
+                                                <UserCheck size={10} />
+                                                <span className="text-[10px] font-bold">{g.assignedTo}</span>
+                                            </div>
+                                        ) : (
+                                            userRole === 'admin' && (
+                                                <div className="text-[10px] text-slate-400 mt-1 italic flex items-center gap-1">
+                                                    <AlertCircle size={10} /> Unassigned
+                                                </div>
+                                            )
+                                        )}
+                                    </td>
                                     <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
                                         <div className="flex items-center gap-1">
                                             {Object.values(GrievanceStatus).slice(0, 3).map(status => (
@@ -698,15 +931,32 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
                                                                 
                                                                 {/* Custom Dropdown List */}
                                                                 {activeDropdown === g.id && (
-                                                                    <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                                                                    <div className="absolute z-50 w-72 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-64 overflow-y-auto">
+                                                                        <div className="sticky top-0 bg-slate-50 px-3 py-2 border-b border-slate-100 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                                                            Select Officer
+                                                                        </div>
                                                                         {Object.values(OFFICER_PROFILES).map((officer) => (
                                                                             <div
                                                                                 key={officer.name}
-                                                                                className="px-3 py-2 hover:bg-slate-50 cursor-pointer flex items-center justify-between group"
+                                                                                className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-0 group transition-colors"
                                                                                 onClick={() => handleOfficerClick(officer.name, g.id)}
                                                                             >
-                                                                                <div className="text-sm font-medium text-slate-700">{officer.name}</div>
-                                                                                <div className="text-xs text-slate-400 group-hover:text-blue-500">View Profile</div>
+                                                                                <div className="flex justify-between items-start">
+                                                                                    <div>
+                                                                                        <div className="text-sm font-bold text-slate-900 group-hover:text-blue-700">{officer.name}</div>
+                                                                                        <div className="text-xs text-slate-500 font-medium flex items-center gap-1 mt-0.5">
+                                                                                            <Briefcase size={10} className="text-slate-400" /> {officer.role}
+                                                                                        </div>
+                                                                                        <div className="text-[10px] text-slate-400 mt-1.5 flex flex-wrap gap-2">
+                                                                                             <span className="flex items-center gap-1 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                                                                                <Phone size={8} /> {officer.phone}
+                                                                                             </span>
+                                                                                             <span className="flex items-center gap-1 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                                                                                <Mail size={8} /> {officer.email}
+                                                                                             </span>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </div>
                                                                             </div>
                                                                         ))}
                                                                     </div>
@@ -786,18 +1036,42 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
                 </div>
                 
                 {routeInfo && (
-                     <div className="absolute bottom-4 left-4 right-4 z-10 bg-white text-slate-900 p-3 rounded-xl shadow-xl animate-in slide-in-from-bottom-4 border border-slate-200 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
-                                <Navigation size={20} />
-                            </div>
+                     <div className="absolute bottom-4 left-4 right-4 z-10 bg-white/95 backdrop-blur-sm text-slate-900 p-4 rounded-xl shadow-xl animate-in slide-in-from-bottom-4 border border-slate-200">
+                        <div className="flex justify-between items-start mb-3 border-b border-slate-100 pb-2">
                             <div>
-                                <div className="text-xs text-slate-500 font-bold uppercase">Estimated Travel</div>
-                                <div className="font-bold text-lg leading-none">{routeInfo.duration} <span className="text-sm font-normal text-slate-400">({routeInfo.distance})</span></div>
+                                <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
+                                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                                    <span className="font-semibold">From:</span> {routeInfo.origin}
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-slate-500">
+                                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                                    <span className="font-semibold">To:</span> {routeInfo.destination}
+                                </div>
+                            </div>
+                            <div className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wide border ${
+                                routeInfo.traffic === 'Heavy' ? 'bg-red-50 text-red-700 border-red-100' :
+                                routeInfo.traffic === 'Moderate' ? 'bg-orange-50 text-orange-700 border-orange-100' :
+                                'bg-green-50 text-green-700 border-green-100'
+                            }`}>
+                                {routeInfo.traffic} Traffic
                             </div>
                         </div>
-                        <div className="text-xs font-semibold bg-green-100 text-green-700 px-2 py-1 rounded">
-                            Fastest Route
+
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/20">
+                                    <Navigation size={20} />
+                                </div>
+                                <div>
+                                    <div className="text-xs text-slate-400 font-bold uppercase tracking-wider">Est. Travel Time</div>
+                                    <div className="font-extrabold text-xl text-slate-900 leading-none">
+                                        {routeInfo.duration}
+                                        <span className="text-sm font-medium text-slate-400 ml-1.5">
+                                            ({routeInfo.distance})
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                      </div>
                 )}
@@ -1024,18 +1298,42 @@ const AuthorityDashboard: React.FC<AuthorityDashboardProps> = ({
                               </div>
                            </div>
                            
-                           {load.assignedGrievances.length > 0 && (
-                             <div className="bg-slate-50 rounded-lg p-3 max-h-32 overflow-y-auto">
-                                <p className="text-xs font-bold text-slate-400 uppercase mb-2">Current Assignments</p>
-                                {load.assignedGrievances.map(g => (
-                                  <div key={g.id} className="text-xs flex justify-between items-center py-1 border-b border-slate-100 last:border-0">
-                                    <span className="truncate max-w-[150px] text-slate-600">{g.description}</span>
-                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${PRIORITY_COLORS[g.priority]}`}>
-                                      {g.priority}
-                                    </span>
-                                  </div>
-                                ))}
+                           {load.assignedGrievances.length > 0 ? (
+                             <div className="bg-slate-50 rounded-lg p-4 border border-slate-100 max-h-48 overflow-y-auto">
+                                <p className="text-xs font-bold text-slate-400 uppercase mb-3 flex justify-between items-center">
+                                    Current Assignments
+                                    <span className="bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full text-[10px]">{load.assignedGrievances.length}</span>
+                                </p>
+                                <div className="space-y-2">
+                                    {load.assignedGrievances.map(g => (
+                                    <div key={g.id} className="bg-white p-2 rounded border border-slate-200 shadow-sm">
+                                        <div className="flex justify-between items-center mb-1">
+                                            <span className="text-[10px] font-mono font-bold text-slate-500">{g.id}</span>
+                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
+                                                g.status === GrievanceStatus.RESOLVED ? 'bg-green-50 text-green-700 border border-green-100' :
+                                                g.status === GrievanceStatus.IN_PROGRESS ? 'bg-blue-50 text-blue-700 border border-blue-100' : 
+                                                'bg-amber-50 text-amber-700 border border-amber-100'
+                                            }`}>
+                                                {g.status.replace('_', ' ')}
+                                            </span>
+                                        </div>
+                                        <p className="text-xs text-slate-700 line-clamp-2 leading-relaxed">{g.description}</p>
+                                        <div className="mt-1 flex items-center justify-between">
+                                             <span className={`text-[10px] font-semibold ${
+                                                 g.priority === Priority.CRITICAL ? 'text-red-600' : 'text-slate-400'
+                                             }`}>
+                                                {g.priority} Priority
+                                             </span>
+                                             <span className="text-[10px] text-slate-400">{new Date(g.timestamp).toLocaleDateString()}</span>
+                                        </div>
+                                    </div>
+                                    ))}
+                                </div>
                              </div>
+                           ) : (
+                               <div className="text-center py-4 text-xs text-slate-400 italic bg-slate-50 rounded-lg border border-slate-100">
+                                   No active assignments found.
+                               </div>
                            )}
                         </div>
                       );

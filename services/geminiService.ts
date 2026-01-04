@@ -33,8 +33,11 @@ export const analyzeGrievance = async (text: string, images: string[] = []) => {
        - If images are provided, check if they appear VISUALLY CONSISTENT with the text complaint (e.g., if text says "pothole", is there a road/pothole?).
        - Check for quality issues (Blurry, Too Dark, Unclear).
        - IMPORTANT: Do NOT claim to verify authenticity or detect AI-generated images. Focus only on relevance and clarity.
+
+    4. Language Detection:
+       - Detect the language of the grievance text (e.g., English, Hindi, Tamil, Marathi).
     
-    4. Output: JSON format.
+    5. Output: JSON format.
     
     Grievance text: ${text}
   ` }];

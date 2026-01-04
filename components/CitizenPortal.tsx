@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Mic, MapPin, Send, Loader2, Info, CheckCircle2, Volume2, ShieldCheck, StopCircle, Mic2, Square, Clock, ChevronRight, Phone, Image as ImageIcon, X } from 'lucide-react';
+import { Camera, Mic, MapPin, Send, Loader2, Info, CheckCircle2, Volume2, ShieldCheck, StopCircle, Mic2, Square, Clock, ChevronRight, Phone, Image as ImageIcon, X, Languages } from 'lucide-react';
 import { analyzeGrievance, speakText, getPolicyInfo, transcribeAudio } from '../services/geminiService';
 import { Grievance, GrievanceStatus, Priority } from '../types';
 
@@ -50,6 +50,7 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [policyInfo, setPolicyInfo] = useState<{ text: string, sources: any[] } | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [lastAnalysis, setLastAnalysis] = useState<any>(null);
   
   // Voice Input State
   const [isRecording, setIsRecording] = useState(false);
@@ -189,8 +190,10 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
     if (!description.trim()) return;
 
     setIsSubmitting(true);
+    setLastAnalysis(null);
     try {
       const analysis = await analyzeGrievance(description, images);
+      setLastAnalysis(analysis);
       
       const newGrievance: Grievance = {
         id: `G-${Math.floor(Math.random() * 9000 + 1000)}`,
@@ -225,7 +228,7 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
       setLocation(null);
       
       // Auto-hide success message
-      setTimeout(() => setShowSuccess(false), 5000);
+      setTimeout(() => setShowSuccess(false), 8000);
 
     } catch (err) {
       console.error(err);
@@ -314,9 +317,34 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
       </section>
 
       {showSuccess && (
-        <div className="bg-green-50 border border-green-200 text-green-800 rounded-xl p-4 flex items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-500">
-          <CheckCircle2 className="text-green-600 shrink-0" />
-          <p className="font-medium">Grievance submitted successfully! AI has routed it to the relevant department.</p>
+        <div className="bg-green-50 border border-green-200 text-green-800 rounded-xl p-4 animate-in fade-in slide-in-from-top-4 duration-500 shadow-lg">
+          <div className="flex items-start gap-3">
+             <CheckCircle2 className="text-green-600 shrink-0 mt-0.5" />
+             <div className="space-y-2 flex-1">
+                 <p className="font-bold">Grievance submitted successfully!</p>
+                 <p className="text-sm text-green-700/80">AI has analyzed your report and routed it to the relevant department.</p>
+                 
+                 {lastAnalysis && (
+                   <div className="bg-white/60 rounded-lg p-3 text-sm grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 mt-2 border border-green-100">
+                       <div className="flex justify-between sm:block">
+                           <span className="text-xs text-green-600 uppercase font-bold">Category</span>
+                           <div className="font-semibold text-slate-900">{lastAnalysis.category}</div>
+                       </div>
+                       <div className="flex justify-between sm:block">
+                           <span className="text-xs text-green-600 uppercase font-bold">Priority</span>
+                           <div className="font-semibold text-slate-900">{lastAnalysis.priority}</div>
+                       </div>
+                       <div className="flex justify-between sm:block">
+                           <span className="text-xs text-green-600 uppercase font-bold">Language Detected</span>
+                           <div className="font-semibold text-slate-900 flex items-center gap-1">
+                               <Languages size={14} className="text-green-600" />
+                               {lastAnalysis.language || 'Unknown'}
+                           </div>
+                       </div>
+                   </div>
+                 )}
+             </div>
+          </div>
         </div>
       )}
 
@@ -479,14 +507,22 @@ const CitizenPortal: React.FC<CitizenPortalProps> = ({ onGrievanceSubmit, recent
                                <span className="text-[10px] text-slate-400 whitespace-nowrap">{new Date(g.timestamp).toLocaleDateString()}</span>
                             </div>
                             <p className="text-xs text-slate-600 line-clamp-2 mb-2">{g.description}</p>
-                            <div className="flex items-center justify-between">
+                            <div className="flex items-center justify-between flex-wrap gap-2">
                                <span className="text-[10px] font-mono text-slate-400">{g.id}</span>
-                               <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${
-                                  g.status === GrievanceStatus.RESOLVED ? 'bg-green-50 text-green-700' :
-                                  g.status === GrievanceStatus.IN_PROGRESS ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
-                               }`}>
-                                  {g.status.replace('_', ' ')}
-                               </span>
+                               <div className="flex items-center gap-2">
+                                    {g.aiAnalysis?.language && (
+                                       <span className="flex items-center gap-1 text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200 font-medium">
+                                           <Languages size={10} />
+                                           {g.aiAnalysis.language}
+                                       </span>
+                                    )}
+                                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${
+                                      g.status === GrievanceStatus.RESOLVED ? 'bg-green-50 text-green-700' :
+                                      g.status === GrievanceStatus.IN_PROGRESS ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
+                                   }`}>
+                                      {g.status.replace('_', ' ')}
+                                   </span>
+                               </div>
                             </div>
                          </div>
                       </div>
